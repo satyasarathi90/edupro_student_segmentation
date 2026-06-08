@@ -138,7 +138,16 @@ def load_edupro_dataset(
     if "Amount" in df_tx.columns:
         df_tx["Amount"] = pd.to_numeric(df_tx["Amount"], errors="coerce").fillna(0.0)
 
-    # Teacher light normalization happens in teacher_utils (optional)
+    # Teacher normalization (optional but ensures consistent dtypes)
+    try:
+        from .teacher_utils import load_teacher_csv  # local import to avoid circulars
+        if df_teacher is not None and not df_teacher.empty:
+            df_teacher = load_teacher_csv(df_teacher)
+    except Exception:
+        # Keep app running even if teacher normalization fails.
+        pass
+
     return df_users, df_courses, df_tx, df_teacher
+
 
 

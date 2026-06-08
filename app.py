@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import os
-import tempfile
 
 # joblib is currently not used in the app; keeping it commented avoids unused warnings.
 #import joblib
+
 
 import numpy as np
 import numpy as np
 import pandas as pd
 import streamlit as st
 
+# Robust Plotly import: if Plotly fails for any reason, fall back to tables.
 try:
     import plotly.express as px  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover
+except Exception:  # pragma: no cover
     px = None
+
 
 
 # Ensure local imports work when running `streamlit run app.py`
@@ -84,6 +86,14 @@ with st.spinner("Loading dataset..."):
         uploaded_teachers=uploaded_teachers,
     )
 
+# Teacher preview (helps confirm teacher.csv is loaded correctly)
+st.sidebar.subheader("Teacher CSV Preview")
+if df_teacher is None or df_teacher.empty:
+    st.sidebar.caption("No teacher data loaded.")
+else:
+    st.sidebar.dataframe(df_teacher.head(10), use_container_width=True)
+
+
 
 # Feature engineering
 with st.spinner("Building learner profiles & engineered features..."):
@@ -103,10 +113,15 @@ with st.spinner("Evaluating cluster quality / recommendation proxy metrics..."):
 st.subheader("Cluster Overview")
 
 labels_df = model["labels_df"].copy()
-labels_df = labels_df.merge(learner_df[["UserID", "total_courses_enrolled", "diversity_score"]], on="UserID", how="left")
+labels_df = labels_df.merge(
+    learner_df[["UserID", "total_courses_enrolled", "diversity_score"]],
+    on="UserID",
+    how="left",
+)
 
-# Build bar chart without relying on px handling of GroupBy objects.
+# 1) Segment size distribution
 segment_counts = (
+
     labels_df.groupby("segment", as_index=False)["UserID"]
     .count()
     .rename(columns={"UserID": "learners"})
@@ -114,13 +129,60 @@ segment_counts = (
 if px is None:
     st.dataframe(segment_counts)
 else:
-    bar = px.bar(
-        segment_counts,
-        x="segment",
-        y="learners",
-        color="segment",
-        color_discrete_sequence=px.colors.qualitative.Plotly,
+    st.plotly_chart(
+        px.bar(
+            segment_counts,
+            x="segment",
+            y="learners",
+            color="segment",
+            color_discrete_sequence=px.colors.qualitative.Plotly,
+            title="Learners per Segment",
+        ),
+        use_container_width=True,
     )
+
+# 2) Segment comparison in graph format (feature means by segment)
+# Use only numeric features that are present.
+segment_feature_candidates = [
+    "total_courses_enrolled",
+    "avg_courses_per_category",
+    "avg_enrolled_course_rating",
+    "avg_spending_per_learner",
+    "diversity_score",
+    "learning_depth_index",
+]
+segment_feature_cols = [
+    c for c in segment_feature_candidates if c in learner_df.columns
+]
+
+if len(segment_feature_cols) > 0:
+    seg_feature_means = (
+        learner_df.groupby("segment")[segment_feature_cols]
+        .mean()
+        .reset_index()
+    )
+    seg_feature_means_long = seg_feature_means.melt(
+        id_vars=["segment"],
+        var_name="feature",
+        value_name="mean_value",
+    )
+
+    if px is None:
+        st.dataframe(seg_feature_means)
+    else:
+        # Heatmap gives a compact overview.
+        heat = px.density_heatmap(
+            seg_feature_means_long,
+            x="feature",
+            y="segment",
+            z="mean_value",
+            histfunc="avg",
+            color_continuous_scale="Viridis",
+            title="Segment Feature Means (Heatmap)",
+        )
+        heat.update_layout(xaxis_title="Feature", yaxis_title="Segment")
+        st.plotly_chart(heat, use_container_width=True)
+
 
 # (No extra plotly rendering here; chart is already rendered above when px exists)
 
@@ -219,6 +281,7 @@ seg_stats = learner_df.groupby("segment")[
 ].agg(["mean", "median"]).round(3)
 
 st.dataframe(seg_stats)
+
 
 # Recommendation precision proxy (optional display)
 # computed already in evaluation
